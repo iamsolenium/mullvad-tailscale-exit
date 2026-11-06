@@ -1,0 +1,79 @@
+services:
+  mullvad:
+    build: .
+    container_name: mullvad-1
+    restart: unless-stopped
+
+    # Required by mullvad-daemon inside Docker:
+    # - network interfaces
+    # - nftables
+    # - cgroup used by split tunneling
+    privileged: true
+
+    # Important: keep the cgroup namespace private to the container.
+    cgroup: private
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+
+    volumes:
+      - mullvad-state:/etc/mullvad-vpn
+      - mullvad-cache:/var/cache/mullvad-vpn
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          mullvad status | grep -q '^Connected' &&
+          curl -fsS https://am.i.mullvad.net/connected |
+          grep -q "You are connected"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-mullvad
+    restart: unless-stopped
+
+    network_mode: "service:mullvad"
+
+    depends_on:
+      mullvad:
+        condition: service_healthy
+
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
+    environment:
+      TS_AUTHKEY: file:/run/secrets/ts_authkey
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      TS_USERSPACE: "false"
+      TS_ACCEPT_DNS: "false"
+      TS_HOSTNAME: mullvad-exit
+      TS_EXTRA_ARGS: --advertise-exit-node
+
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+
+    secrets:
+      - ts_authkey
+
+secrets:
+  ts_authkey:
+    file: ./ts_authkey.txt
+
+volumes:
+  mullvad-state:
+  mullvad-cache:
+  tailscale-state:
